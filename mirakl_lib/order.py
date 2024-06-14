@@ -36,3 +36,6 @@ class MiraklOrder(BaseModel):
     created_date: str
     customer: Customer
     order_lines: List[MiraklOrderLine]
+
+
+    
