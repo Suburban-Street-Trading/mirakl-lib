@@ -1,6 +1,9 @@
 from dataclasses import dataclass
+from enum import Enum
+import json
+import re
 import time
-from typing import Callable, List, Tuple, TypedDict
+from typing import Any, Callable, List, Tuple, TypeVar, TypedDict, cast
 import requests
 
 from mirakl_lib.offer import OF21QueryParams, OF21Response
@@ -9,12 +12,19 @@ from mirakl_lib.shipping import CarrierNotFound, OR23RequestBody, ShippingCarrie
 from .order import MiraklOrder
 from .response import OR11Response
 
+F = TypeVar("F", bound=Callable[..., Any])
+
 
 @dataclass
 class GetWaitingOrdersResult:
     orders: List[MiraklOrder]
     has_more: bool
     next_order_start_offset: int
+
+
+class ShippingConfirmationResult(Enum):
+    CONFIRMED = "CONFIRMED"
+    PREVIOUSLY_CONFIRMED = "PREVIOUSLY_CONFIRMED"
 
 
 def round_up_to_nearest_nine(number: float) -> float:
@@ -26,7 +36,7 @@ def round_up_to_nearest_nine(number: float) -> float:
     return rounded_number
 
 
-class CarrierConfiguration(TypedDict):
+class CarrierConfig(TypedDict):
     shipping_carrier: ShippingCarrier
     marketplace_carrier_code: str
 
@@ -52,6 +62,29 @@ def determine_carrier(tracking_number: str) -> ShippingCarrier:
         raise CarrierNotFound
 
 
+def retry_wrapper(request_func: F) -> F:
+    def wrapper(_: "MiraklClient", *args, **kwargs):
+        retry_count = 0
+        max_retries = 10
+
+        while retry_count < max_retries:
+
+            try:
+                request_func(*args, **kwargs)
+                retry_count += 1
+
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    retry_after = int(e.response.headers.get("Retry-After", 2))
+                    time.sleep(retry_after)
+                else:
+                    raise e
+
+        raise Exception("Max retries exceeded")
+
+    return cast(F, wrapper)
+
+
 class MiraklClient:
 
     def __init__(
@@ -59,7 +92,7 @@ class MiraklClient:
         marketplace: str,
         base_url: str | None = None,
         api_key: str | None = None,
-        carrier_configurations: list[CarrierConfiguration] = [],
+        carrier_configurations: list[CarrierConfig] = [],
         tracking_url_generation_func: Callable[
             [ShippingCarrier, str], str
         ] = generate_custom_tracking_url,
@@ -70,7 +103,7 @@ class MiraklClient:
         self.marketplace = marketplace
         self.base_url = base_url
         self.api_key = api_key
-        self.carrier_configurations: dict[ShippingCarrier, CarrierConfiguration] = {
+        self.carrier_configurations: dict[ShippingCarrier, CarrierConfig] = {
             config["shipping_carrier"]: config for config in carrier_configurations
         }
         self.tracking_url_generation_func = tracking_url_generation_func
@@ -218,6 +251,7 @@ class MiraklClient:
     # SHIPPING/TRACKING MANAGEMENT #
     ##################################
 
+    @retry_wrapper
     def put_tracking(self, order_id: str | int, tracking_number: str) -> None:
 
         if type(order_id) is int:
@@ -255,67 +289,67 @@ class MiraklClient:
         if not response.ok:
             response.raise_for_status()
 
+    @retry_wrapper
+    def put_ship_confirmation(self, order_id: str | int) -> ShippingConfirmationResult:
+        if type(order_id) is int:
+            order_id = str(order_id)
 
-class ConfiguredCarriersConfig(TypedDict):
-    marketplace: str
-    carriers: list[CarrierConfiguration]
+        url = f"{self.base_url}/api/orders/{order_id}/ship"
+
+        response = requests.put(url, headers=self._default_headers())
+
+        if response.ok:
+            return ShippingConfirmationResult.CONFIRMED
+
+        message = json.loads(response.content).get("message")
+        pattern = r"Current status is"
+        match = re.search(pattern, message)
+        if match:
+            return ShippingConfirmationResult.PREVIOUSLY_CONFIRMED
+
+        response.raise_for_status()
+
+        raise Exception("This code should be unreachable, here to make mypy happy.")
 
 
-class CustomTrackingUrlGenerationConfig(TypedDict):
-    marketplace: str
-    tracking_url_generation_func: Callable[[ShippingCarrier, str], str]
+class MarketplaceConfig(TypedDict):
+    base_url: str
+    api_key: str
 
 
-class CustomCarrierDeterminationConfig(TypedDict):
-    marketplace: str
-    carrier_determination_func: Callable[[str], ShippingCarrier]
+CustomTrackingUrlFunc = Callable[[ShippingCarrier, str], str]
+CustomCarrierDeterminationFunc = Callable[[str], ShippingCarrier]
 
 
 class MiraklClientProvider:
     def __init__(
         self,
         marketplace_names: List[str],
-        credential_callback: Callable[[str], Tuple[str, str]],
-        configured_carriers_config: list[ConfiguredCarriersConfig] = [],
-        custom_tracking_url_generation_config: list[
-            CustomTrackingUrlGenerationConfig
-        ] = [],
-        custom_carrier_determination_config: list[
-            CustomCarrierDeterminationConfig
-        ] = [],
+        marketplace_config: dict[str, MarketplaceConfig],
+        configured_carriers_config: dict[str, list[CarrierConfig]] = {},
+        custom_tracking_url_generation_config: dict[str, CustomTrackingUrlFunc] = {},
+        custom_carrier_determination_config: dict[
+            str, CustomCarrierDeterminationFunc
+        ] = {},
     ):
         self.clients: dict[str, MiraklClient] = {}
 
-        carriers_config_lookup = {
-            config["marketplace"]: config["carriers"]
-            for config in configured_carriers_config
-        }
-
-        tracking_url_generation_lookup = {
-            config["marketplace"]: config["tracking_url_generation_func"]
-            for config in custom_tracking_url_generation_config
-        }
-
-        carrier_determination_lookup = {
-            config["marketplace"]: config["carrier_determination_func"]
-            for config in custom_carrier_determination_config
-        }
-
         for marketplace in marketplace_names:
-            base_url, api_key = credential_callback(marketplace)
+            config = marketplace_config[marketplace]
+            base_url, api_key = (config["base_url"], config["api_key"])
             self.clients[marketplace] = MiraklClient(
                 marketplace,
                 base_url=base_url,
                 api_key=api_key,
-                carrier_configurations=carriers_config_lookup.get(marketplace, []),
+                carrier_configurations=configured_carriers_config.get(marketplace, []),
             )
-            if marketplace in tracking_url_generation_lookup:
+            if marketplace in custom_tracking_url_generation_config:
                 self.clients[marketplace].tracking_url_generation_func = (
-                    tracking_url_generation_lookup[marketplace]
+                    custom_tracking_url_generation_config[marketplace]
                 )
-            if marketplace in carrier_determination_lookup:
+            if marketplace in custom_carrier_determination_config:
                 self.clients[marketplace].carrier_determination_func = (
-                    carrier_determination_lookup[marketplace]
+                    custom_carrier_determination_config[marketplace]
                 )
 
     def get_client(self, marketplace: str) -> MiraklClient | None:

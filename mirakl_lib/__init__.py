@@ -1,9 +1,11 @@
 from .client import (
     MiraklClient,
     MiraklClientProvider,
-    ConfiguredCarriersConfig,
-    CustomCarrierDeterminationConfig,
-    CustomTrackingUrlGenerationConfig,
+    CarrierConfig,
+    MarketplaceConfig,
+    CustomCarrierDeterminationFunc,
+    CustomTrackingUrlFunc,
+    ShippingConfirmationResult,
 )
 from .order import ShippingAddress, Customer, MiraklOrderLine, MiraklOrder
 from .offer import OF21QueryParams, OF21Response
@@ -22,7 +24,9 @@ __all__ = [
     "OF21Response",
     "ShippingCarrier",
     "CarrierNotFound",
-    "ConfiguredCarriersConfig",
-    "CustomCarrierDeterminationConfig",
-    "CustomTrackingUrlGenerationConfig",
+    "MarketplaceConfig",
+    "CustomCarrierDeterminationFunc",
+    "CustomTrackingUrlFunc",
+    "CarrierConfig",
+    "ShippingConfirmationResult",
 ]
