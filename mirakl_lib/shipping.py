@@ -37,10 +37,8 @@ class OR23RequestBody(BaseModel):
     tracking_number: str
 
     def validate_for_mirakl(self) -> "OR23RequestBody":
-        if (
-            self.carrier_code is None
-            and self.carrier_name is None
-            or self.carrier_url is None
+        if self.carrier_code is None and (
+            self.carrier_name is None or self.carrier_url is None
         ):
             raise ValueError(
                 "If carrier code is not provided, the BOTH carrier name and carrier url must be provided"

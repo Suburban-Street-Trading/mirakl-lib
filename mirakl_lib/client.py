@@ -63,14 +63,14 @@ def determine_carrier(tracking_number: str) -> ShippingCarrier:
 
 
 def retry_wrapper(request_func: F) -> F:
-    def wrapper(_: "MiraklClient", *args, **kwargs):
+    def wrapper(instance: "MiraklClient", *args, **kwargs):
         retry_count = 0
         max_retries = 10
 
         while retry_count < max_retries:
 
             try:
-                request_func(*args, **kwargs)
+                request_func(instance, *args, **kwargs)
                 retry_count += 1
 
             except requests.exceptions.HTTPError as e:
@@ -252,14 +252,20 @@ class MiraklClient:
     ##################################
 
     @retry_wrapper
-    def put_tracking(self, order_id: str | int, tracking_number: str) -> None:
+    def put_tracking(
+        self,
+        order_id: str | int,
+        tracking_number: str,
+        carrier: ShippingCarrier | None = None,
+    ) -> None:
 
         if type(order_id) is int:
             order_id = str(order_id)
 
         url = f"{self.base_url}/api/orders/{order_id}/tracking"
 
-        carrier = self.carrier_determination_func(tracking_number)
+        if carrier is None:
+            carrier = self.carrier_determination_func(tracking_number)
 
         request_payload: OR23RequestBody | None = None
 
