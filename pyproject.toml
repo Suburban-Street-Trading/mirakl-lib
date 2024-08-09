@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "mirakl-lib"
+version = "0.1.2"
+description = ""
+authors = ["Sam Benning <sam.b@elitecommercegroup.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+requests = "^2.32.3"
+pydantic = "^2.8.2"
+validators = "^0.33.0"
+
+[tool.poetry.group.dev.dependencies]
+types-requests = "^2.32.0.20240622"
+mypy = "^1.11.1"
+ruff = "^0.5.7"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
