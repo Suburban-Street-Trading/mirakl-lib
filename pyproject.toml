@@ -13,6 +13,8 @@ validators = "^0.33.0"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "^2.32.0.20240622"
+mypy = "^1.11.1"
+ruff = "^0.5.7"
 
 [build-system]
 requires = ["poetry-core"]
