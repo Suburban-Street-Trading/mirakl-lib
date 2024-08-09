@@ -3,7 +3,7 @@ from enum import Enum
 import json
 import re
 import time
-from typing import Any, Callable, List, Tuple, TypeVar, TypedDict, cast
+from typing import Any, Callable, List, TypeVar, TypedDict, cast
 import requests
 
 from mirakl_lib.offer import OF21QueryParams, OF21Response
