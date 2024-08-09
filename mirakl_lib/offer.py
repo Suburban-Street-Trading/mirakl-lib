@@ -42,7 +42,7 @@ class OF21Response(BaseModel):
         package_quantity: int | None = None
         price: float
         product_brand: str | None
-        product_description: str | None
+        product_description: str | None = None
         product_sku: str
         product_tax_code: str | None = None
         product_title: str
@@ -80,6 +80,11 @@ class OF24Request(BaseModel):
 
     offers: list["Offer"]
 
+    def validate_all_offers(self) -> "OF24Request":
+        for offer in self.offers:
+            offer.validate_for_mirakl()
+        return self
+
     class Offer(BaseModel):
 
         allow_quote_requests: bool = False
@@ -97,12 +102,20 @@ class OF24Request(BaseModel):
         price: float
         pricing_unit: str | None = None
         product_id: str
-        product_id_type: str
+        product_id_type: str = "SKU"
         product_tax_code: str = "P0000000"
         quantity: int = 0
         shop_sku: str
-        state_code: str
+        state_code: str = "11"
         update_delete: str = "update"
+
+        def validate_for_mirakl(self) -> "OF24Request.Offer":
+            if self.update_delete == "update":
+                if self.discount is not None:
+                    if self.discount.price >= self.price:
+                        raise ValueError("Discount price must be less than the price")
+
+            return self
 
         class AllPrices(BaseModel):
             channel_code: str | None = None
@@ -114,4 +127,4 @@ class OF24Request(BaseModel):
         class Discount(BaseModel):
             end_date: str | None = None
             start_date: str | None = None
-            price: float | None = None
+            price: float
