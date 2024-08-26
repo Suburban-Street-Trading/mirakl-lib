@@ -1,23 +1,26 @@
 from typing import List, Optional
 from pydantic import BaseModel
 
+
 class ShippingAddress(BaseModel):
     city: str
     country: str
-    country_iso_code: str | None
+    country_iso_code: str | None = None
     firstname: str
     lastname: str
-    phone: Optional[str]
+    phone: str | None = None
     state: str
     street_1: str
     street_2: Optional[str]
-    zipcode: str
-    
+    zip_code: str
+
+
 class Customer(BaseModel):
     firstname: str
     lastname: str
-    email: str | None
+    email: str | None = None
     shipping_address: ShippingAddress | None
+
 
 class MiraklOrderLine(BaseModel):
     created_date: str
@@ -29,6 +32,7 @@ class MiraklOrderLine(BaseModel):
     price: float
     quantity: int
     total_price: float
+
 
 class MiraklOrder(BaseModel):
     order_id: str
