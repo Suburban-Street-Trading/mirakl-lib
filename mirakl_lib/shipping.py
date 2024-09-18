@@ -9,6 +9,7 @@ class ShippingCarrier(Enum):
     USPS = "usps"
     FEDEX = "fedex"
     DHL = "dhl"
+    ONTRAC = "ontrac"
     CUSTOM = "custom"
 
     @classmethod

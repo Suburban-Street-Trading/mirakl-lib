@@ -6,7 +6,8 @@ import time
 from typing import Any, Callable, List, TypeVar, TypedDict, cast
 import requests
 
-from mirakl_lib.offer import OF21QueryParams, OF21Response
+from mirakl_lib.offer import OF21QueryParams, OF21Response, OF24Request
+from mirakl_lib.public_input import OfferUpdateInput
 from mirakl_lib.shipping import CarrierNotFound, OR23RequestBody, ShippingCarrier
 
 from .order import MiraklOrder
@@ -16,7 +17,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 @dataclass
-class GetWaitingOrdersResult:
+class GetOrdersResult:
     orders: List[MiraklOrder]
     has_more: bool
     next_order_start_offset: int
@@ -53,9 +54,13 @@ def generate_custom_tracking_url(carrier: ShippingCarrier, tracking_number: str)
             return f"https://www.dhl.com/us-en/home/tracking.html?tracking-id={tracking_number}"
         case ShippingCarrier.CUSTOM:
             raise NotImplementedError
+        case ShippingCarrier.ONTRAC:
+            raise NotImplementedError
 
 
-def determine_carrier(tracking_number: str) -> ShippingCarrier:
+def determine_carrier(
+    tracking_number: str, marketpace_order_number: str | None = None
+) -> ShippingCarrier:
     if tracking_number.startswith("1Z"):
         return ShippingCarrier.UPS
     else:
@@ -71,16 +76,17 @@ def retry_wrapper(request_func: F) -> F:
 
             try:
                 request_func(instance, *args, **kwargs)
-                retry_count += 1
-
+                break
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 429:
                     retry_after = int(e.response.headers.get("Retry-After", 2))
                     time.sleep(retry_after)
+                    retry_count += 1
                 else:
                     raise e
 
-        raise Exception("Max retries exceeded")
+        if retry_count >= max_retries:
+            raise Exception("Max retries exceeded")
 
     return cast(F, wrapper)
 
@@ -97,7 +103,7 @@ class MiraklClient:
             [ShippingCarrier, str], str
         ] = generate_custom_tracking_url,
         carrier_determination_func: Callable[
-            [str], ShippingCarrier
+            [str, str | None], ShippingCarrier
         ] = determine_carrier,
     ):
         self.marketplace = marketplace
@@ -126,7 +132,7 @@ class MiraklClient:
         size: int,
         status: str | None = None,
         order_ids: List[str] = [],
-    ) -> GetWaitingOrdersResult:
+    ) -> GetOrdersResult:
         url = f"{self.base_url}/api/orders"
 
         params: dict[str, str | int] = {"offset": offset, "max": size}
@@ -141,30 +147,27 @@ class MiraklClient:
 
         response = requests.get(url, params=params_str, headers=self._default_headers())
 
-        if response.ok:
-            response_json = response.json()
-
-            # Deserialize the response JSON into an OR11Response object
-            or11_response = OR11Response(
-                orders=[
-                    MiraklOrder.model_validate(order)
-                    for order in response_json["orders"]
-                ],
-                total_count=response_json["total_count"],
-            )
-
-            has_more = or11_response.total_count > offset + size
-
-            # Return the result
-            return GetWaitingOrdersResult(
-                orders=or11_response.orders,
-                has_more=has_more,
-                next_order_start_offset=offset + size,
-            )
-        else:
+        if not response.ok:
             response.raise_for_status()
 
-        raise Exception("This code should be unreachable")
+        response_json = response.json()
+
+        # Deserialize the response JSON into an OR11Response object
+        or11_response = OR11Response(
+            orders=[
+                MiraklOrder.model_validate(order) for order in response_json["orders"]
+            ],
+            total_count=response_json["total_count"],
+        )
+
+        has_more = or11_response.total_count > offset + size
+
+        # Return the result
+        return GetOrdersResult(
+            orders=or11_response.orders,
+            has_more=has_more,
+            next_order_start_offset=offset + size,
+        )
 
     def accept_order(self, order_id: str, order_line_ids: List[str]):
         url = f"{self.base_url}/api/orders/{order_id}/accept"
@@ -188,8 +191,47 @@ class MiraklClient:
     # OFFER MANAGEMENT #
     ##################################
 
-    def update_offers(self):
-        raise NotImplementedError
+    def update_offers(self, input: list[OfferUpdateInput]) -> int:
+
+        url = f"{self.base_url}/api/offers"
+
+        request_model = OF24Request(offers=[])
+
+        for offer_input in input:
+
+            offer_request_model = OF24Request.Offer(
+                price=round_up_to_nearest_nine(offer_input["base_price"]),
+                shop_sku=offer_input["offer_sku"],
+                product_id=offer_input["product_id"],
+                quantity=offer_input["quantity"],
+            )
+
+            if "discount_price" in offer_input:
+
+                start_date = offer_input.get("discount_start_date")
+                end_date = offer_input.get("discount_end_date")
+
+                offer_request_model.discount = OF24Request.Offer.Discount(
+                    price=offer_input["discount_price"],
+                )
+
+                if start_date is not None:
+                    offer_request_model.discount.start_date = start_date
+                if end_date is not None:
+                    offer_request_model.discount.end_date = end_date
+
+            request_model.offers.append(offer_request_model)
+
+        request_json_payload = request_model.validate_all_offers().model_dump()
+
+        response = requests.post(
+            url, headers=self._default_headers(), json=request_json_payload
+        )
+
+        if not response.ok:
+            response.raise_for_status()
+
+        return response.json().get("import_id", 0)
 
     def get_all_offers(self) -> list[OF21Response.Offer]:
 
@@ -265,7 +307,7 @@ class MiraklClient:
         url = f"{self.base_url}/api/orders/{order_id}/tracking"
 
         if carrier is None:
-            carrier = self.carrier_determination_func(tracking_number)
+            carrier = self.carrier_determination_func(tracking_number, tracking_number)
 
         request_payload: OR23RequestBody | None = None
 
@@ -324,7 +366,7 @@ class MarketplaceConfig(TypedDict):
 
 
 CustomTrackingUrlFunc = Callable[[ShippingCarrier, str], str]
-CustomCarrierDeterminationFunc = Callable[[str], ShippingCarrier]
+CustomCarrierDeterminationFunc = Callable[[str, str | None], ShippingCarrier]
 
 
 class MiraklClientProvider:
