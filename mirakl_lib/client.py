@@ -54,6 +54,8 @@ def generate_custom_tracking_url(carrier: ShippingCarrier, tracking_number: str)
             return f"https://www.dhl.com/us-en/home/tracking.html?tracking-id={tracking_number}"
         case ShippingCarrier.CUSTOM:
             raise NotImplementedError
+        case ShippingCarrier.ONTRAC:
+            raise NotImplementedError
 
 
 def determine_carrier(
